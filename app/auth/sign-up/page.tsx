@@ -99,9 +99,11 @@ export default function SignUpPage() {
 
         if (signInError) throw signInError
 
-        // Redirect to role dashboard
-        const dest = role === "citizen" ? "/citizen" : `/${role}`
-        router.push(dest)
+        // Redirect to role dashboard - use window.location for a hard nav
+        // so middleware picks up the fresh session cookie
+        const dest = `/${role}`
+        window.location.href = dest
+        return
       }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "An error occurred")

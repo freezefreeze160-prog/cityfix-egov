@@ -50,7 +50,9 @@ export default function LoginPage() {
           .single()
 
         const role = profile?.role ?? "citizen"
-        router.push(`/${role}`)
+        // Hard navigate so middleware picks up fresh session cookie
+        window.location.href = `/${role}`
+        return
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "An error occurred"
