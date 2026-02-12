@@ -4,6 +4,10 @@ import { NextResponse } from "next/server"
 
 export const maxDuration = 60
 
+const GEMINI_KEY = process.env.GEMINI_API_KEY
+const GEMINI_URL =
+  "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+
 export async function POST(request: Request) {
   try {
     const formData = await request.formData()
@@ -72,20 +76,17 @@ export async function POST(request: Request) {
       data: { publicUrl: afterUrl },
     } = supabase.storage.from("request-photos").getPublicUrl(filePath)
 
-    // Check OpenAI key
-    const apiKey = process.env.OPENAI_API_KEY
-    if (!apiKey) {
+    if (!GEMINI_KEY) {
       return NextResponse.json(
-        { error: "OPENAI_API_KEY not configured. Add it in the Vars section." },
+        { error: "GEMINI_API_KEY not configured. Add it in the Vars section." },
         { status: 500 }
       )
     }
 
-    // Build GPT-4o messages with vision
-    const content: Array<Record<string, unknown>> = []
+    // Build Gemini parts with images
+    const parts: Array<Record<string, unknown>> = []
 
-    content.push({
-      type: "text",
+    parts.push({
       text: `You are an AI inspector for a municipal 311-style service request system.
 ${beforeUrl ? "Compare the BEFORE photo and AFTER photo of a civic issue (pothole, trash, graffiti, etc.)." : "Analyze this AFTER photo of a completed civic maintenance job."}
 
@@ -98,7 +99,7 @@ Return STRICTLY valid JSON only, no markdown, no backticks:
 {"resolved": true, "score": 8, "comment": "The pothole has been properly filled and paved."}`,
     })
 
-    // Add "before" image if available - convert to base64 for reliable delivery
+    // Add "before" image if available
     if (beforeUrl) {
       try {
         const beforeRes = await fetch(beforeUrl)
@@ -107,57 +108,43 @@ Return STRICTLY valid JSON only, no markdown, no backticks:
           if (beforeBuf.byteLength < 4 * 1024 * 1024) {
             const b64 = Buffer.from(beforeBuf).toString("base64")
             const mime = beforeRes.headers.get("content-type") || "image/jpeg"
-            content.push({
-              type: "image_url",
-              image_url: { url: `data:${mime};base64,${b64}`, detail: "low" },
-            })
+            parts.push({ inline_data: { mime_type: mime, data: b64 } })
           }
         }
-      } catch (imgErr) {
-        console.error("[v0] Before photo fetch error:", imgErr)
+      } catch {
+        // before photo fetch failed
       }
     }
 
-    // Add "after" image as base64
+    // Add "after" image
     if (arrayBuffer.byteLength < 4 * 1024 * 1024) {
       const afterBase64 = Buffer.from(arrayBuffer).toString("base64")
       const afterMime = afterFile.type || "image/jpeg"
-      content.push({
-        type: "image_url",
-        image_url: {
-          url: `data:${afterMime};base64,${afterBase64}`,
-          detail: "low",
-        },
-      })
+      parts.push({ inline_data: { mime_type: afterMime, data: afterBase64 } })
     }
 
-    const gptRes = await fetch("https://api.openai.com/v1/chat/completions", {
+    const geminiRes = await fetch(`${GEMINI_URL}?key=${GEMINI_KEY}`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "gpt-4.1-mini",
-        messages: [{ role: "user", content }],
-        temperature: 0.2,
-        max_tokens: 300,
+        contents: [{ parts }],
+        generationConfig: { temperature: 0.2, maxOutputTokens: 500 },
       }),
     })
 
-    if (!gptRes.ok) {
-      const errBody = await gptRes.text()
-      console.error("[v0] OpenAI HTTP error:", gptRes.status, errBody)
+    if (!geminiRes.ok) {
+      const errBody = await geminiRes.text()
+      console.error("[v0] Gemini verify error:", geminiRes.status, errBody)
       return NextResponse.json(
-        { error: `OpenAI API error (${gptRes.status}): ${errBody.slice(0, 200)}` },
+        { error: `Gemini API error (${geminiRes.status}): ${errBody.slice(0, 200)}` },
         { status: 502 }
       )
     }
 
-    const gptData = await gptRes.json()
-    const rawText = gptData?.choices?.[0]?.message?.content ?? ""
+    const geminiData = await geminiRes.json()
+    const rawText =
+      geminiData?.candidates?.[0]?.content?.parts?.[0]?.text ?? ""
 
-    // Parse JSON from GPT response
     let verification: { resolved: boolean; score: number; comment: string }
     try {
       const jsonMatch = rawText.match(/\{[\s\S]*\}/)
