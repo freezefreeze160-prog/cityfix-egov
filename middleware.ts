@@ -2,6 +2,22 @@ import { createServerClient } from "@supabase/ssr"
 import { NextResponse, type NextRequest } from "next/server"
 
 export async function middleware(request: NextRequest) {
+  const { pathname } = request.nextUrl
+
+  // --- 1. Skip middleware entirely for public paths ---
+  // The landing page, auth pages, API routes, and static files
+  // should never be blocked by middleware
+  if (
+    pathname === "/" ||
+    pathname.startsWith("/auth") ||
+    pathname.startsWith("/api") ||
+    pathname.startsWith("/_next") ||
+    pathname.includes(".")
+  ) {
+    return NextResponse.next()
+  }
+
+  // --- 2. Only run Supabase session refresh on protected paths ---
   let supabaseResponse = NextResponse.next({ request })
 
   const supabase = createServerClient(
@@ -29,36 +45,31 @@ export async function middleware(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser()
 
-  const protectedPaths = ["/citizen", "/worker", "/admin"]
-  const isProtected = protectedPaths.some((path) =>
-    request.nextUrl.pathname.startsWith(path)
-  )
-
-  if (isProtected && !user) {
+  // --- 3. Redirect unauthenticated users to login ---
+  if (!user) {
     const url = request.nextUrl.clone()
     url.pathname = "/auth/login"
     return NextResponse.redirect(url)
   }
 
-  if (user && isProtected) {
-    const { data: profile } = await supabase
-      .from("profiles")
-      .select("role")
-      .eq("id", user.id)
-      .single()
+  // --- 4. Role-based route guard ---
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("role")
+    .eq("id", user.id)
+    .single()
 
-    if (profile) {
-      const rolePathMap: Record<string, string> = {
-        citizen: "/citizen",
-        worker: "/worker",
-        admin: "/admin",
-      }
-      const allowedPath = rolePathMap[profile.role]
-      if (allowedPath && !request.nextUrl.pathname.startsWith(allowedPath)) {
-        const url = request.nextUrl.clone()
-        url.pathname = allowedPath
-        return NextResponse.redirect(url)
-      }
+  if (profile) {
+    const rolePathMap: Record<string, string> = {
+      citizen: "/citizen",
+      worker: "/worker",
+      admin: "/admin",
+    }
+    const allowedPath = rolePathMap[profile.role]
+    if (allowedPath && !pathname.startsWith(allowedPath)) {
+      const url = request.nextUrl.clone()
+      url.pathname = allowedPath
+      return NextResponse.redirect(url)
     }
   }
 
@@ -66,7 +77,5 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
-  ],
+  matcher: ["/citizen/:path*", "/worker/:path*", "/admin/:path*"],
 }
