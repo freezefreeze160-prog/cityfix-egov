@@ -2,10 +2,9 @@ import { NextRequest, NextResponse } from "next/server"
 
 export const maxDuration = 60
 
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY
-
 export async function POST(req: NextRequest) {
-  if (!GEMINI_API_KEY) {
+  const apiKey = process.env.OPENAI_API_KEY
+  if (!apiKey) {
     return NextResponse.json({ error: "AI service not configured" }, { status: 500 })
   }
 
@@ -14,13 +13,17 @@ export async function POST(req: NextRequest) {
     const { title, description, category, photo_url } = body
 
     if (!title || !description || !category) {
-      return NextResponse.json({ error: "Title, description, and category are required" }, { status: 400 })
+      return NextResponse.json(
+        { error: "Title, description, and category are required" },
+        { status: 400 }
+      )
     }
 
-    // Build the prompt parts
-    const parts: Array<{ text: string } | { inline_data: { mime_type: string; data: string } }> = []
+    // Build GPT-4o messages with vision
+    const content: Array<Record<string, unknown>> = []
 
-    parts.push({
+    content.push({
+      type: "text",
       text: `You are an AI moderator for a 311-style municipal service request platform called CityFix.
 
 A citizen has submitted a report. Your job is to evaluate whether this is a VALID civic issue that warrants dispatching city workers.
@@ -53,67 +56,51 @@ Respond with ONLY valid JSON (no markdown, no code blocks):
 }
 
 Score guide: 1-3 = reject (trivial/invalid), 4-5 = borderline, 6-8 = valid issue, 9-10 = urgent/critical.
-Set valid=true only if score >= 4.`
+Set valid=true only if score >= 4.`,
     })
 
-    // If there's a photo, fetch and include it (limit 4MB)
+    // If there's a photo, include it via URL (GPT-4o supports image URLs directly)
     if (photo_url) {
-      try {
-        const imgRes = await fetch(photo_url)
-        if (imgRes.ok) {
-          const buffer = await imgRes.arrayBuffer()
-          if (buffer.byteLength < 4 * 1024 * 1024) {
-            const base64 = Buffer.from(buffer).toString("base64")
-            const contentType = imgRes.headers.get("content-type") || "image/jpeg"
-
-            parts.push({
-              inline_data: {
-                mime_type: contentType,
-                data: base64,
-              },
-            })
-            parts.push({
-              text: "Above is the photo attached to this report. Factor it into your assessment - does the photo show a real civic issue?",
-            })
-          }
-        }
-      } catch {
-        // Photo fetch failed, evaluate text-only
-      }
+      content.push({
+        type: "image_url",
+        image_url: { url: photo_url, detail: "low" },
+      })
+      content.push({
+        type: "text",
+        text: "Above is the photo attached to this report. Factor it into your assessment - does the photo show a real civic issue?",
+      })
     }
 
-    const geminiRes = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [{ parts }],
-          generationConfig: {
-            temperature: 0.2,
-            maxOutputTokens: 300,
-          },
-        }),
-      }
-    )
+    const gptRes = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        messages: [{ role: "user", content }],
+        temperature: 0.2,
+        max_tokens: 300,
+      }),
+    })
 
-    if (!geminiRes.ok) {
-      const errText = await geminiRes.text()
-      console.error("[v0] Gemini validate error:", geminiRes.status, errText)
-      // On AI failure, let the report through as valid with a note
+    if (!gptRes.ok) {
+      const errText = await gptRes.text()
+      console.error("[v0] OpenAI validate error:", gptRes.status, errText)
+      // On AI failure, let the report through for manual review
       return NextResponse.json({
         valid: true,
         score: 5,
-        reason: `AI validation unavailable (${geminiRes.status}) - report accepted for manual review`,
+        reason: `AI validation unavailable (${gptRes.status}) - report accepted for manual review`,
         suggested_priority: "medium",
       })
     }
 
-    const geminiData = await geminiRes.json()
-    const rawText =
-      geminiData.candidates?.[0]?.content?.parts?.[0]?.text || ""
+    const gptData = await gptRes.json()
+    const rawText = gptData?.choices?.[0]?.message?.content || ""
 
-    // Parse JSON from Gemini response
+    // Parse JSON from GPT response
     const jsonMatch = rawText.match(/\{[\s\S]*\}/)
     if (!jsonMatch) {
       return NextResponse.json({
@@ -130,7 +117,9 @@ Set valid=true only if score >= 4.`
       valid: Boolean(parsed.valid),
       score: Math.min(10, Math.max(1, Number(parsed.score) || 5)),
       reason: String(parsed.reason || "No reason provided"),
-      suggested_priority: ["low", "medium", "high", "urgent"].includes(parsed.suggested_priority)
+      suggested_priority: ["low", "medium", "high", "urgent"].includes(
+        parsed.suggested_priority
+      )
         ? parsed.suggested_priority
         : "medium",
     })
