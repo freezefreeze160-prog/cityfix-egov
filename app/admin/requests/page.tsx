@@ -82,6 +82,7 @@ function AssignDialog({
   )
   const [selectedStatus, setSelectedStatus] = useState<RequestStatus>(request.status)
   const [isAssigning, setIsAssigning] = useState(false)
+  const [isDeleting, setIsDeleting] = useState(false)
   const [open, setOpen] = useState(false)
 
   const handleAssign = async () => {
@@ -109,12 +110,32 @@ function AssignDialog({
     }
   }
 
+  const handleDelete = async () => {
+    if (!confirm("Are you sure you want to delete this request?")) return
+    setIsDeleting(true)
+    try {
+      const supabase = createClient()
+      const { error } = await supabase
+        .from("service_requests")
+        .delete()
+        .eq("id", request.id)
+      if (error) throw error
+      toast.success("Request deleted")
+      setOpen(false)
+      mutate("admin-requests")
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to delete")
+    } finally {
+      setIsDeleting(false)
+    }
+  }
+
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         <Button variant="outline" size="sm">
           <UserPlus className="mr-1 h-3.5 w-3.5" />
-          {request.assigned_worker_id ? "Reassign" : "Assign"}
+          Manage
         </Button>
       </DialogTrigger>
       <DialogContent>
@@ -183,16 +204,21 @@ function AssignDialog({
               </Select>
             </div>
           </div>
-          <Button onClick={handleAssign} disabled={isAssigning}>
-            {isAssigning ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Saving...
-              </>
-            ) : (
-              "Save Assignment"
-            )}
-          </Button>
+          <div className="flex gap-2">
+            <Button className="flex-1" onClick={handleAssign} disabled={isAssigning || isDeleting}>
+              {isAssigning ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                "Save Changes"
+              )}
+            </Button>
+            <Button variant="destructive" onClick={handleDelete} disabled={isAssigning || isDeleting}>
+              {isDeleting ? <Loader2 className="h-4 w-4 animate-spin" /> : "Delete"}
+            </Button>
+          </div>
         </div>
       </DialogContent>
     </Dialog>
@@ -311,7 +337,18 @@ export default function AdminRequestsPage() {
                   )}
                 </div>
               </div>
-              <AssignDialog request={r} workers={workers} />
+              <div className="flex items-center gap-2">
+                {r.photo_url && (
+                  <a href={r.photo_url} target="_blank" rel="noopener noreferrer">
+                    <img
+                      src={r.photo_url}
+                      alt="Report photo"
+                      className="h-12 w-12 rounded-md border object-cover"
+                    />
+                  </a>
+                )}
+                <AssignDialog request={r} workers={workers} />
+              </div>
             </CardContent>
           </Card>
         ))}

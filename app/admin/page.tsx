@@ -28,7 +28,7 @@ async function fetchAllRequests(): Promise<ServiceRequest[]> {
 
 export default function AdminOverview() {
   const { data: requests = [], isLoading } = useSWR(
-    "admin-all-requests",
+    "admin-requests",
     fetchAllRequests
   )
 
