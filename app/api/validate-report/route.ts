@@ -59,16 +59,28 @@ Score guide: 1-3 = reject (trivial/invalid), 4-5 = borderline, 6-8 = valid issue
 Set valid=true only if score >= 4.`,
     })
 
-    // If there's a photo, include it via URL (GPT-4o supports image URLs directly)
+    // If there's a photo, fetch it and convert to base64 for reliable delivery
     if (photo_url) {
-      content.push({
-        type: "image_url",
-        image_url: { url: photo_url, detail: "low" },
-      })
-      content.push({
-        type: "text",
-        text: "Above is the photo attached to this report. Factor it into your assessment - does the photo show a real civic issue?",
-      })
+      try {
+        const imgRes = await fetch(photo_url)
+        if (imgRes.ok) {
+          const buf = await imgRes.arrayBuffer()
+          if (buf.byteLength < 4 * 1024 * 1024) {
+            const b64 = Buffer.from(buf).toString("base64")
+            const mime = imgRes.headers.get("content-type") || "image/jpeg"
+            content.push({
+              type: "image_url",
+              image_url: { url: `data:${mime};base64,${b64}`, detail: "low" },
+            })
+            content.push({
+              type: "text",
+              text: "Above is the photo attached to this report. Factor it into your assessment - does the photo show a real civic issue?",
+            })
+          }
+        }
+      } catch (imgErr) {
+        console.error("[v0] Photo fetch error:", imgErr)
+      }
     }
 
     const gptRes = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -78,7 +90,7 @@ Set valid=true only if score >= 4.`,
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: "gpt-4o-mini",
+        model: "gpt-4.1-mini",
         messages: [{ role: "user", content }],
         temperature: 0.2,
         max_tokens: 300,

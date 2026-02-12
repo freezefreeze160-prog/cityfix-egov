@@ -98,12 +98,24 @@ Return STRICTLY valid JSON only, no markdown, no backticks:
 {"resolved": true, "score": 8, "comment": "The pothole has been properly filled and paved."}`,
     })
 
-    // Add "before" image if available
+    // Add "before" image if available - convert to base64 for reliable delivery
     if (beforeUrl) {
-      content.push({
-        type: "image_url",
-        image_url: { url: beforeUrl, detail: "low" },
-      })
+      try {
+        const beforeRes = await fetch(beforeUrl)
+        if (beforeRes.ok) {
+          const beforeBuf = await beforeRes.arrayBuffer()
+          if (beforeBuf.byteLength < 4 * 1024 * 1024) {
+            const b64 = Buffer.from(beforeBuf).toString("base64")
+            const mime = beforeRes.headers.get("content-type") || "image/jpeg"
+            content.push({
+              type: "image_url",
+              image_url: { url: `data:${mime};base64,${b64}`, detail: "low" },
+            })
+          }
+        }
+      } catch (imgErr) {
+        console.error("[v0] Before photo fetch error:", imgErr)
+      }
     }
 
     // Add "after" image as base64
@@ -126,7 +138,7 @@ Return STRICTLY valid JSON only, no markdown, no backticks:
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: "gpt-4o-mini",
+        model: "gpt-4.1-mini",
         messages: [{ role: "user", content }],
         temperature: 0.2,
         max_tokens: 300,
