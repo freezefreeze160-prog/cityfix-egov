@@ -4,7 +4,7 @@ export const maxDuration = 60
 
 const GEMINI_KEY = process.env.GEMINI_API_KEY
 const GEMINI_URL =
-  "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent"
+  "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
 
 export async function POST(req: NextRequest) {
   if (!GEMINI_KEY) {
