@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 
+export const maxDuration = 60
+
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY
 
 export async function POST(req: NextRequest) {
@@ -54,24 +56,26 @@ Score guide: 1-3 = reject (trivial/invalid), 4-5 = borderline, 6-8 = valid issue
 Set valid=true only if score >= 4.`
     })
 
-    // If there's a photo, fetch and include it
+    // If there's a photo, fetch and include it (limit 4MB)
     if (photo_url) {
       try {
         const imgRes = await fetch(photo_url)
         if (imgRes.ok) {
           const buffer = await imgRes.arrayBuffer()
-          const base64 = Buffer.from(buffer).toString("base64")
-          const contentType = imgRes.headers.get("content-type") || "image/jpeg"
+          if (buffer.byteLength < 4 * 1024 * 1024) {
+            const base64 = Buffer.from(buffer).toString("base64")
+            const contentType = imgRes.headers.get("content-type") || "image/jpeg"
 
-          parts.push({
-            inline_data: {
-              mime_type: contentType,
-              data: base64,
-            },
-          })
-          parts.push({
-            text: "Above is the photo attached to this report. Factor it into your assessment - does the photo show a real civic issue?",
-          })
+            parts.push({
+              inline_data: {
+                mime_type: contentType,
+                data: base64,
+              },
+            })
+            parts.push({
+              text: "Above is the photo attached to this report. Factor it into your assessment - does the photo show a real civic issue?",
+            })
+          }
         }
       } catch {
         // Photo fetch failed, evaluate text-only
@@ -95,12 +99,12 @@ Set valid=true only if score >= 4.`
 
     if (!geminiRes.ok) {
       const errText = await geminiRes.text()
-      console.error("[v0] Gemini API error:", errText)
+      console.error("[v0] Gemini validate error:", geminiRes.status, errText)
       // On AI failure, let the report through as valid with a note
       return NextResponse.json({
         valid: true,
         score: 5,
-        reason: "AI validation unavailable - report accepted for manual review",
+        reason: `AI validation unavailable (${geminiRes.status}) - report accepted for manual review`,
         suggested_priority: "medium",
       })
     }

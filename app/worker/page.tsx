@@ -241,9 +241,13 @@ function MyTaskCard({ task }: { task: ServiceRequest }) {
         body: formData,
       })
       const data = await res.json()
-      if (!res.ok) throw new Error(data.error || "Verification failed")
-      setVerification(data.verification)
-      toast.success("AI verification complete")
+      if (!res.ok) throw new Error(data.error || `Verification failed (${res.status})`)
+      if (data.verification) {
+        setVerification(data.verification)
+        toast.success("AI verification complete")
+      } else {
+        throw new Error("No verification data returned")
+      }
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Verification failed")
     } finally {
