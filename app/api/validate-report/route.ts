@@ -90,10 +90,10 @@ Set valid=true only if score >= 4.`,
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: "o3-mini",
+        model: "gpt-4.1",
         messages: [{ role: "user", content }],
         temperature: 0.2,
-        max_tokens: 300,
+        max_tokens: 500,
       }),
     })
 
