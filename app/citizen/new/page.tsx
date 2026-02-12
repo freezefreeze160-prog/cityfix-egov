@@ -2,10 +2,7 @@
 
 import { createClient } from "@/lib/supabase/client"
 import { Button } from "@/components/ui/button"
-import {
-  Card,
-  CardContent,
-} from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
@@ -16,8 +13,18 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import type { Category, RequestPriority } from "@/lib/types"
-import { ArrowLeft, Camera, MapPin, Loader2 } from "lucide-react"
+import type { Category, RequestPriority, AIValidation } from "@/lib/types"
+import {
+  ArrowLeft,
+  Camera,
+  MapPin,
+  Loader2,
+  BrainCircuit,
+  CheckCircle2,
+  XCircle,
+  AlertTriangle,
+  Send,
+} from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useRef, useState } from "react"
@@ -30,10 +37,7 @@ async function fetchCategories(): Promise<Category[]> {
     .from("categories")
     .select("*")
     .order("name")
-  if (error) {
-    console.error("[v0] Failed to fetch categories:", error.message)
-    return []
-  }
+  if (error) return []
   return (data ?? []) as Category[]
 }
 
@@ -48,10 +52,15 @@ export default function NewRequestPage() {
   const [longitude, setLongitude] = useState<number | null>(null)
   const [photoFile, setPhotoFile] = useState<File | null>(null)
   const [photoPreview, setPhotoPreview] = useState<string | null>(null)
+  const [uploadedPhotoUrl, setUploadedPhotoUrl] = useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [geoLoading, setGeoLoading] = useState(false)
+  const [validating, setValidating] = useState(false)
+  const [validation, setValidation] = useState<AIValidation | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const router = useRouter()
+
+  const selectedCategory = categories.find((c) => c.id === categoryId)
 
   const detectLocation = () => {
     if (!navigator.geolocation) {
@@ -63,9 +72,7 @@ export default function NewRequestPage() {
       (pos) => {
         setLatitude(pos.coords.latitude)
         setLongitude(pos.coords.longitude)
-        setAddress(
-          `${pos.coords.latitude.toFixed(4)}, ${pos.coords.longitude.toFixed(4)}`
-        )
+        setAddress(`${pos.coords.latitude.toFixed(4)}, ${pos.coords.longitude.toFixed(4)}`)
         setGeoLoading(false)
         toast.success("Location detected")
       },
@@ -83,88 +90,112 @@ export default function NewRequestPage() {
       const reader = new FileReader()
       reader.onload = () => setPhotoPreview(reader.result as string)
       reader.readAsDataURL(file)
+      setValidation(null)
+      setUploadedPhotoUrl(null)
     }
   }
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!title.trim()) {
-      toast.error("Please enter a title")
-      return
-    }
-    if (!categoryId) {
-      toast.error("Please select a category")
-      return
-    }
+  const resetValidation = () => setValidation(null)
 
-    setIsSubmitting(true)
+  // Step 1: Upload photo (if any) and call AI to validate
+  const handleValidate = async () => {
+    if (!title.trim()) return toast.error("Please enter a title")
+    if (!description.trim()) return toast.error("Please describe the issue in detail")
+    if (!categoryId) return toast.error("Please select a category")
+
+    setValidating(true)
+    setValidation(null)
 
     try {
       const supabase = createClient()
-      const {
-        data: { user },
-        error: authError,
-      } = await supabase.auth.getUser()
+      let photoUrl = uploadedPhotoUrl
 
+      // Upload photo if not already uploaded
+      if (photoFile && !photoUrl) {
+        const { data: { user } } = await supabase.auth.getUser()
+        if (user) {
+          const ext = photoFile.name.split(".").pop() || "jpg"
+          const filePath = `${user.id}/${Date.now()}.${ext}`
+          const { error: uploadError } = await supabase.storage
+            .from("request-photos")
+            .upload(filePath, photoFile, { cacheControl: "3600", upsert: false })
+          if (!uploadError) {
+            const { data: { publicUrl } } = supabase.storage
+              .from("request-photos")
+              .getPublicUrl(filePath)
+            photoUrl = publicUrl
+            setUploadedPhotoUrl(publicUrl)
+          }
+        }
+      }
+
+      const res = await fetch("/api/validate-report", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title,
+          description,
+          category: selectedCategory?.name || "Other",
+          photo_url: photoUrl,
+        }),
+      })
+
+      const result: AIValidation = await res.json()
+      setValidation(result)
+
+      if (result.valid) {
+        setPriority(result.suggested_priority)
+        toast.success("Report validated - ready to submit!")
+      } else {
+        toast.error("Report rejected by AI")
+      }
+    } catch {
+      toast.error("AI validation failed - you can try again")
+      setValidation({
+        valid: true,
+        score: 5,
+        reason: "Validation service unavailable - report accepted for manual review",
+        suggested_priority: priority,
+      })
+    } finally {
+      setValidating(false)
+    }
+  }
+
+  // Step 2: Submit validated report to Supabase
+  const handleSubmit = async () => {
+    if (!validation?.valid) return toast.error("Report must pass AI validation first")
+
+    setIsSubmitting(true)
+    try {
+      const supabase = createClient()
+      const { data: { user }, error: authError } = await supabase.auth.getUser()
       if (authError || !user) {
         toast.error("Session expired. Please log in again.")
         router.push("/auth/login")
         return
       }
 
-      let photoUrl: string | null = null
-
-      if (photoFile) {
-        const ext = photoFile.name.split(".").pop() || "jpg"
-        const filePath = `${user.id}/${Date.now()}.${ext}`
-        const { error: uploadError } = await supabase.storage
-          .from("request-photos")
-          .upload(filePath, photoFile, {
-            cacheControl: "3600",
-            upsert: false,
-          })
-        if (uploadError) {
-          console.error("[v0] Photo upload error:", uploadError)
-          toast.error("Photo upload failed: " + uploadError.message)
-          setIsSubmitting(false)
-          return
-        }
-
-        const {
-          data: { publicUrl },
-        } = supabase.storage.from("request-photos").getPublicUrl(filePath)
-        photoUrl = publicUrl
-      }
-
-      const insertData = {
+      const { error } = await supabase.from("service_requests").insert({
         title: title.trim(),
         description: description.trim() || null,
         category_id: categoryId,
-        priority,
+        priority: validation.suggested_priority || priority,
         citizen_id: user.id,
         address: address.trim() || null,
         latitude,
         longitude,
-        photo_url: photoUrl,
-      }
+        photo_url: uploadedPhotoUrl,
+        ai_validation: validation,
+      })
 
-      const { error } = await supabase
-        .from("service_requests")
-        .insert(insertData)
+      if (error) throw error
 
-      if (error) {
-        console.error("[v0] Insert error:", error)
-        toast.error("Submit failed: " + error.message)
-        return
-      }
-
-      toast.success("Request submitted successfully!")
+      toast.success("Report submitted successfully!")
       router.push("/citizen")
     } catch (err: unknown) {
-      console.error("[v0] Unexpected error:", err)
-      toast.error(
-        err instanceof Error ? err.message : "An unexpected error occurred"
-      )
+      const msg = err instanceof Error ? err.message : "Unknown error"
+      toast.error(`Submit failed: ${msg}`)
     } finally {
       setIsSubmitting(false)
     }
@@ -180,143 +211,167 @@ export default function NewRequestPage() {
           <ArrowLeft className="h-4 w-4" />
           Back to requests
         </Link>
-        <h1 className="text-2xl font-bold tracking-tight">
-          Report a New Issue
-        </h1>
+        <h1 className="text-2xl font-bold tracking-tight text-foreground">Report a Civic Issue</h1>
         <p className="text-sm text-muted-foreground">
-          Fill in the details about the civic issue you want to report.
+          Describe the problem. AI will evaluate whether it warrants dispatching a city crew.
         </p>
       </div>
 
       <Card>
-        <CardContent className="pt-6">
-          <form onSubmit={handleSubmit} className="flex flex-col gap-5">
+        <CardContent className="space-y-5 pt-6">
+          {/* Title */}
+          <div className="grid gap-2">
+            <Label htmlFor="title">Title</Label>
+            <Input
+              id="title"
+              placeholder="e.g. Large pothole on Main Street"
+              required
+              value={title}
+              onChange={(e) => { setTitle(e.target.value); resetValidation() }}
+            />
+          </div>
+
+          {/* Description */}
+          <div className="grid gap-2">
+            <Label htmlFor="description">Description</Label>
+            <Textarea
+              id="description"
+              placeholder="Provide specific details: what the issue is, exact location, severity, how many people are affected..."
+              rows={4}
+              value={description}
+              onChange={(e) => { setDescription(e.target.value); resetValidation() }}
+            />
+          </div>
+
+          {/* Category + Priority */}
+          <div className="grid gap-4 sm:grid-cols-2">
             <div className="grid gap-2">
-              <Label htmlFor="title">Title</Label>
+              <Label>Category</Label>
+              <Select value={categoryId} onValueChange={(v) => { setCategoryId(v); resetValidation() }}>
+                <SelectTrigger><SelectValue placeholder="Select category" /></SelectTrigger>
+                <SelectContent>
+                  {categories.map((cat) => (
+                    <SelectItem key={cat.id} value={cat.id}>{cat.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid gap-2">
+              <Label>Priority (AI may adjust)</Label>
+              <Select value={priority} onValueChange={(v) => setPriority(v as RequestPriority)}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="low">Low</SelectItem>
+                  <SelectItem value="medium">Medium</SelectItem>
+                  <SelectItem value="high">High</SelectItem>
+                  <SelectItem value="urgent">Urgent</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          {/* Location */}
+          <div className="grid gap-2">
+            <Label>Location</Label>
+            <div className="flex gap-2">
               <Input
-                id="title"
-                placeholder="e.g. Large pothole on Main Street"
-                required
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
+                placeholder="Address or coordinates"
+                value={address}
+                onChange={(e) => setAddress(e.target.value)}
+                className="flex-1"
               />
+              <Button type="button" variant="outline" onClick={detectLocation} disabled={geoLoading}>
+                {geoLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <MapPin className="h-4 w-4" />}
+              </Button>
             </div>
+          </div>
 
-            <div className="grid gap-2">
-              <Label htmlFor="description">Description</Label>
-              <Textarea
-                id="description"
-                placeholder="Describe the issue in detail..."
-                rows={4}
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-              />
+          {/* Photo */}
+          <div className="grid gap-2">
+            <Label>Photo (recommended for faster validation)</Label>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              onChange={handlePhotoChange}
+              className="hidden"
+            />
+            <div className="flex items-center gap-3">
+              <Button type="button" variant="outline" onClick={() => fileInputRef.current?.click()}>
+                <Camera className="mr-2 h-4 w-4" />
+                {photoFile ? "Change Photo" : "Attach Photo"}
+              </Button>
+              {photoFile && (
+                <span className="text-sm text-muted-foreground">{photoFile.name}</span>
+              )}
             </div>
+            {photoPreview && (
+              <img src={photoPreview} alt="Preview" className="mt-2 h-40 w-full rounded-lg border object-cover" />
+            )}
+          </div>
 
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="grid gap-2">
-                <Label htmlFor="category">Category</Label>
-                <Select value={categoryId} onValueChange={setCategoryId}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select category" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {categories.map((cat) => (
-                      <SelectItem key={cat.id} value={cat.id}>
-                        {cat.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="grid gap-2">
-                <Label htmlFor="priority">Priority</Label>
-                <Select
-                  value={priority}
-                  onValueChange={(v) => setPriority(v as RequestPriority)}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="low">Low</SelectItem>
-                    <SelectItem value="medium">Medium</SelectItem>
-                    <SelectItem value="high">High</SelectItem>
-                    <SelectItem value="urgent">Urgent</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-
-            <div className="grid gap-2">
-              <Label htmlFor="address">Location</Label>
-              <div className="flex gap-2">
-                <Input
-                  id="address"
-                  placeholder="Address or coordinates"
-                  value={address}
-                  onChange={(e) => setAddress(e.target.value)}
-                  className="flex-1"
-                />
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={detectLocation}
-                  disabled={geoLoading}
-                >
-                  {geoLoading ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
+          {/* AI Validation Result */}
+          {validation && (
+            <Card className={`border-2 ${validation.valid ? "border-success bg-success/5" : "border-destructive bg-destructive/5"}`}>
+              <CardContent className="p-4">
+                <div className="flex items-start gap-3">
+                  {validation.valid ? (
+                    <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-success" />
                   ) : (
-                    <MapPin className="h-4 w-4" />
+                    <XCircle className="mt-0.5 h-5 w-5 shrink-0 text-destructive" />
                   )}
-                </Button>
-              </div>
-            </div>
+                  <div className="space-y-1">
+                    <p className="text-sm font-semibold text-foreground">
+                      {validation.valid ? "Report Approved by AI" : "Report Rejected by AI"}
+                      <span className="ml-2 font-normal text-muted-foreground">
+                        (Severity: {validation.score}/10)
+                      </span>
+                    </p>
+                    <p className="text-sm text-muted-foreground">{validation.reason}</p>
+                    {validation.valid && (
+                      <p className="text-xs text-muted-foreground">
+                        AI-assigned priority: <span className="font-medium capitalize text-foreground">{validation.suggested_priority}</span>
+                      </p>
+                    )}
+                    {!validation.valid && (
+                      <p className="mt-1 text-xs text-destructive">
+                        Edit your report details above and click &quot;Re-validate&quot; to try again.
+                      </p>
+                    )}
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
 
-            <div className="grid gap-2">
-              <Label>Photo (optional)</Label>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                onChange={handlePhotoChange}
-                className="hidden"
-              />
-              <div className="flex items-center gap-3">
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => fileInputRef.current?.click()}
-                >
-                  <Camera className="mr-2 h-4 w-4" />
-                  {photoFile ? "Change Photo" : "Add Photo"}
-                </Button>
-                {photoFile && (
-                  <span className="text-sm text-muted-foreground">
-                    {photoFile.name}
-                  </span>
+          {/* Action Buttons */}
+          <div className="flex flex-col gap-3 pt-2">
+            {!validation?.valid && (
+              <Button
+                onClick={handleValidate}
+                disabled={validating || !title.trim() || !description.trim() || !categoryId}
+                className="w-full"
+              >
+                {validating ? (
+                  <><Loader2 className="mr-2 h-4 w-4 animate-spin" />AI is Reviewing...</>
+                ) : validation && !validation.valid ? (
+                  <><AlertTriangle className="mr-2 h-4 w-4" />Re-validate Report</>
+                ) : (
+                  <><BrainCircuit className="mr-2 h-4 w-4" />Validate with AI</>
                 )}
-              </div>
-              {photoPreview && (
-                <img
-                  src={photoPreview}
-                  alt="Preview"
-                  className="mt-2 h-40 w-full rounded-lg object-cover"
-                />
-              )}
-            </div>
+              </Button>
+            )}
 
-            <Button type="submit" disabled={isSubmitting} className="w-full">
-              {isSubmitting ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Submitting...
-                </>
-              ) : (
-                "Submit Request"
-              )}
-            </Button>
-          </form>
+            {validation?.valid && (
+              <Button onClick={handleSubmit} disabled={isSubmitting} className="w-full">
+                {isSubmitting ? (
+                  <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Submitting...</>
+                ) : (
+                  <><Send className="mr-2 h-4 w-4" />Submit Validated Report</>
+                )}
+              </Button>
+            )}
+          </div>
         </CardContent>
       </Card>
     </div>

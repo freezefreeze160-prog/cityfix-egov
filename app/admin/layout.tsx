@@ -4,13 +4,14 @@ import { createClient } from "@/lib/supabase/client"
 import { DashboardShell } from "@/components/dashboard-shell"
 import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
-import { LayoutDashboard, ClipboardList, MapPin, BarChart3 } from "lucide-react"
+import { LayoutDashboard, ClipboardList, MapPin, BarChart3, Users } from "lucide-react"
 import type { Profile } from "@/lib/types"
 
 const navItems = [
   { label: "Overview", href: "/admin", icon: <LayoutDashboard className="h-4 w-4" /> },
   { label: "All Requests", href: "/admin/requests", icon: <ClipboardList className="h-4 w-4" /> },
   { label: "City Map", href: "/admin/map", icon: <MapPin className="h-4 w-4" /> },
+  { label: "Users", href: "/admin/users", icon: <Users className="h-4 w-4" /> },
   { label: "Analytics", href: "/admin/analytics", icon: <BarChart3 className="h-4 w-4" /> },
 ]
 

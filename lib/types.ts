@@ -25,6 +25,13 @@ export interface AIVerification {
   comment: string
 }
 
+export interface AIValidation {
+  valid: boolean
+  score: number
+  reason: string
+  suggested_priority: RequestPriority
+}
+
 export interface ServiceRequest {
   id: string
   title: string
@@ -39,6 +46,7 @@ export interface ServiceRequest {
   address: string | null
   photo_url: string | null
   ai_verification: AIVerification | null
+  ai_validation: AIValidation | null
   created_at: string
   updated_at: string
   // Joined fields

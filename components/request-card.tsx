@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { StatusBadge } from "@/components/status-badge"
 import { PriorityBadge } from "@/components/priority-badge"
 import type { ServiceRequest } from "@/lib/types"
-import { MapPin, Clock, Tag } from "lucide-react"
+import { MapPin, Clock, Tag, BrainCircuit } from "lucide-react"
 import { formatDistanceToNow } from "date-fns"
 
 interface RequestCardProps {
@@ -52,6 +52,12 @@ export function RequestCard({ request, onClick }: RequestCardProps) {
               addSuffix: true,
             })}
           </span>
+          {request.ai_validation && (
+            <span className={`flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-medium ${request.ai_validation.valid ? "bg-primary/10 text-primary" : "bg-destructive/10 text-destructive"}`}>
+              <BrainCircuit className="h-3 w-3" />
+              AI: {request.ai_validation.score}/10
+            </span>
+          )}
         </div>
       </CardContent>
     </Card>

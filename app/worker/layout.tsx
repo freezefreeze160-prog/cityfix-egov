@@ -4,11 +4,12 @@ import { createClient } from "@/lib/supabase/client"
 import { DashboardShell } from "@/components/dashboard-shell"
 import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
-import { ClipboardList, MapPin } from "lucide-react"
+import { ClipboardList, MapPin, CheckCircle2 } from "lucide-react"
 import type { Profile } from "@/lib/types"
 
 const navItems = [
   { label: "My Tasks", href: "/worker", icon: <ClipboardList className="h-4 w-4" /> },
+  { label: "Completed", href: "/worker/history", icon: <CheckCircle2 className="h-4 w-4" /> },
   { label: "Field Map", href: "/worker/map", icon: <MapPin className="h-4 w-4" /> },
 ]
 

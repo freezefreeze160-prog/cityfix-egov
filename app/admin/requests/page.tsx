@@ -52,7 +52,7 @@ async function fetchAllRequests(): Promise<ServiceRequest[]> {
   const supabase = createClient()
   const { data } = await supabase
     .from("service_requests")
-    .select("*, category:categories(*), worker:profiles!service_requests_assigned_worker_id_fkey(*), ai_verification")
+    .select("*, category:categories(*), worker:profiles!service_requests_assigned_worker_id_fkey(*)")
     .order("created_at", { ascending: false })
   return (data ?? []) as ServiceRequest[]
 }
@@ -80,6 +80,7 @@ function AssignDialog({
   const [selectedPriority, setSelectedPriority] = useState<RequestPriority>(
     request.priority
   )
+  const [selectedStatus, setSelectedStatus] = useState<RequestStatus>(request.status)
   const [isAssigning, setIsAssigning] = useState(false)
   const [open, setOpen] = useState(false)
 
@@ -87,12 +88,13 @@ function AssignDialog({
     setIsAssigning(true)
     try {
       const supabase = createClient()
+      const newStatus = selectedWorker && selectedStatus === "submitted" ? "assigned" : selectedStatus
       const { error } = await supabase
         .from("service_requests")
         .update({
           assigned_worker_id: selectedWorker || null,
           priority: selectedPriority,
-          status: selectedWorker ? "assigned" : request.status,
+          status: newStatus,
         })
         .eq("id", request.id)
 
@@ -144,22 +146,42 @@ function AssignDialog({
               </SelectContent>
             </Select>
           </div>
-          <div className="grid gap-2">
-            <Label>Priority</Label>
-            <Select
-              value={selectedPriority}
-              onValueChange={(v) => setSelectedPriority(v as RequestPriority)}
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="low">Low</SelectItem>
-                <SelectItem value="medium">Medium</SelectItem>
-                <SelectItem value="high">High</SelectItem>
-                <SelectItem value="urgent">Urgent</SelectItem>
-              </SelectContent>
-            </Select>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="grid gap-2">
+              <Label>Priority</Label>
+              <Select
+                value={selectedPriority}
+                onValueChange={(v) => setSelectedPriority(v as RequestPriority)}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="low">Low</SelectItem>
+                  <SelectItem value="medium">Medium</SelectItem>
+                  <SelectItem value="high">High</SelectItem>
+                  <SelectItem value="urgent">Urgent</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid gap-2">
+              <Label>Status</Label>
+              <Select
+                value={selectedStatus}
+                onValueChange={(v) => setSelectedStatus(v as RequestStatus)}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="submitted">Submitted</SelectItem>
+                  <SelectItem value="assigned">Assigned</SelectItem>
+                  <SelectItem value="in_progress">In Progress</SelectItem>
+                  <SelectItem value="resolved">Resolved</SelectItem>
+                  <SelectItem value="closed">Closed</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
           </div>
           <Button onClick={handleAssign} disabled={isAssigning}>
             {isAssigning ? (
@@ -276,9 +298,15 @@ export default function AdminRequestsPage() {
                   {r.ai_verification && (
                     <span className={`flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-medium ${r.ai_verification.resolved ? "bg-success/15 text-success" : "bg-destructive/15 text-destructive"}`}>
                       <BrainCircuit className="h-3 w-3" />
-                      AI: {r.ai_verification.resolved ? "Verified" : "Not Resolved"}
+                      Work: {r.ai_verification.resolved ? "Verified" : "Not Done"}
                       <Star className="ml-0.5 h-3 w-3" />
                       {r.ai_verification.score}/10
+                    </span>
+                  )}
+                  {r.ai_validation && (
+                    <span className={`flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-medium ${r.ai_validation.valid ? "bg-primary/10 text-primary" : "bg-destructive/15 text-destructive"}`}>
+                      <BrainCircuit className="h-3 w-3" />
+                      Report: {r.ai_validation.valid ? "Valid" : "Rejected"} ({r.ai_validation.score}/10)
                     </span>
                   )}
                 </div>
