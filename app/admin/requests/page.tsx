@@ -40,6 +40,8 @@ import {
   Tag,
   UserPlus,
   Loader2,
+  BrainCircuit,
+  Star,
 } from "lucide-react"
 import { formatDistanceToNow } from "date-fns"
 import { useState } from "react"
@@ -50,7 +52,7 @@ async function fetchAllRequests(): Promise<ServiceRequest[]> {
   const supabase = createClient()
   const { data } = await supabase
     .from("service_requests")
-    .select("*, category:categories(*), worker:profiles!service_requests_assigned_worker_id_fkey(*)")
+    .select("*, category:categories(*), worker:profiles!service_requests_assigned_worker_id_fkey(*), ai_verification")
     .order("created_at", { ascending: false })
   return (data ?? []) as ServiceRequest[]
 }
@@ -269,6 +271,14 @@ export default function AdminRequestsPage() {
                   {r.worker && (
                     <span className="rounded bg-muted px-1.5 py-0.5 text-xs">
                       Worker: {r.worker.full_name || "Assigned"}
+                    </span>
+                  )}
+                  {r.ai_verification && (
+                    <span className={`flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-medium ${r.ai_verification.resolved ? "bg-success/15 text-success" : "bg-destructive/15 text-destructive"}`}>
+                      <BrainCircuit className="h-3 w-3" />
+                      AI: {r.ai_verification.resolved ? "Verified" : "Not Resolved"}
+                      <Star className="ml-0.5 h-3 w-3" />
+                      {r.ai_verification.score}/10
                     </span>
                   )}
                 </div>

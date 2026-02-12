@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
+import { Progress } from "@/components/ui/progress"
 import type { ServiceRequest, RequestStatus } from "@/lib/types"
 import {
   MapPin,
@@ -29,11 +30,21 @@ import {
   ChevronDown,
   ChevronUp,
   Inbox,
+  BrainCircuit,
+  CheckCircle2,
+  XCircle,
+  Star,
 } from "lucide-react"
 import { formatDistanceToNow } from "date-fns"
 import { useRef, useState } from "react"
 import { toast } from "sonner"
 import useSWR, { mutate } from "swr"
+
+interface AIVerification {
+  resolved: boolean
+  score: number
+  comment: string
+}
 
 async function fetchAssignedTasks(): Promise<ServiceRequest[]> {
   const supabase = createClient()
@@ -53,13 +64,93 @@ async function fetchAssignedTasks(): Promise<ServiceRequest[]> {
   return (data ?? []) as ServiceRequest[]
 }
 
+function VerificationResult({ result }: { result: AIVerification }) {
+  return (
+    <div className="rounded-lg border bg-card p-4">
+      <div className="mb-3 flex items-center gap-2">
+        <BrainCircuit className="h-5 w-5 text-primary" />
+        <span className="text-sm font-semibold">AI Verification Result</span>
+      </div>
+      <div className="mb-3 flex items-center gap-4">
+        <div className="flex items-center gap-1.5">
+          {result.resolved ? (
+            <CheckCircle2 className="h-5 w-5 text-success" />
+          ) : (
+            <XCircle className="h-5 w-5 text-destructive" />
+          )}
+          <span className={`text-sm font-medium ${result.resolved ? "text-success" : "text-destructive"}`}>
+            {result.resolved ? "Issue Resolved" : "Not Fully Resolved"}
+          </span>
+        </div>
+        <div className="flex items-center gap-1">
+          <Star className="h-4 w-4 text-warning" />
+          <span className="text-sm font-bold">{result.score}</span>
+          <span className="text-xs text-muted-foreground">/10</span>
+        </div>
+      </div>
+      <Progress value={result.score * 10} className="mb-2 h-2" />
+      <p className="text-sm text-muted-foreground">{result.comment}</p>
+    </div>
+  )
+}
+
 function TaskCard({ task }: { task: ServiceRequest }) {
   const [expanded, setExpanded] = useState(false)
   const [newStatus, setNewStatus] = useState<RequestStatus>(task.status)
   const [comment, setComment] = useState("")
   const [photoFile, setPhotoFile] = useState<File | null>(null)
+  const [photoPreview, setPhotoPreview] = useState<string | null>(null)
   const [isUpdating, setIsUpdating] = useState(false)
+  const [isVerifying, setIsVerifying] = useState(false)
+  const [verification, setVerification] = useState<AIVerification | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const handlePhotoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (file) {
+      setPhotoFile(file)
+      const reader = new FileReader()
+      reader.onload = () => setPhotoPreview(reader.result as string)
+      reader.readAsDataURL(file)
+    }
+  }
+
+  const handleVerify = async () => {
+    if (!photoFile) {
+      toast.error("Please attach an after-photo first")
+      return
+    }
+
+    setIsVerifying(true)
+    setVerification(null)
+
+    try {
+      const formData = new FormData()
+      formData.append("request_id", task.id)
+      formData.append("after_photo", photoFile)
+      if (task.photo_url) {
+        formData.append("before_url", task.photo_url)
+      }
+
+      const res = await fetch("/api/verify-report", {
+        method: "POST",
+        body: formData,
+      })
+
+      const data = await res.json()
+
+      if (!res.ok) {
+        throw new Error(data.error || "Verification failed")
+      }
+
+      setVerification(data.verification)
+      toast.success("AI verification complete")
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Verification failed")
+    } finally {
+      setIsVerifying(false)
+    }
+  }
 
   const handleUpdate = async () => {
     setIsUpdating(true)
@@ -71,7 +162,8 @@ function TaskCard({ task }: { task: ServiceRequest }) {
       if (!user) throw new Error("Not authenticated")
 
       let photoUrl: string | null = null
-      if (photoFile) {
+      if (photoFile && !verification) {
+        // Only upload separately if we haven't already through verify
         const ext = photoFile.name.split(".").pop()
         const filePath = `${user.id}/${Date.now()}.${ext}`
         const { error: uploadError } = await supabase.storage
@@ -84,14 +176,12 @@ function TaskCard({ task }: { task: ServiceRequest }) {
         photoUrl = publicUrl
       }
 
-      // Update status on the request
       const { error: updateError } = await supabase
         .from("service_requests")
         .update({ status: newStatus })
         .eq("id", task.id)
       if (updateError) throw updateError
 
-      // Add update log entry
       const { error: logError } = await supabase
         .from("request_updates")
         .insert({
@@ -106,6 +196,8 @@ function TaskCard({ task }: { task: ServiceRequest }) {
       toast.success("Task updated successfully")
       setComment("")
       setPhotoFile(null)
+      setPhotoPreview(null)
+      setVerification(null)
       setExpanded(false)
       mutate("worker-tasks")
     } catch (err: unknown) {
@@ -156,11 +248,14 @@ function TaskCard({ task }: { task: ServiceRequest }) {
         </div>
 
         {task.photo_url && (
-          <img
-            src={task.photo_url}
-            alt="Issue photo"
-            className="mb-3 h-32 w-full rounded-lg object-cover"
-          />
+          <div className="mb-3">
+            <p className="mb-1 text-xs font-medium text-muted-foreground">Before photo:</p>
+            <img
+              src={task.photo_url}
+              alt="Issue photo (before)"
+              className="h-32 w-full rounded-lg object-cover"
+            />
+          </div>
         )}
 
         <Button
@@ -209,24 +304,69 @@ function TaskCard({ task }: { task: ServiceRequest }) {
                 onChange={(e) => setComment(e.target.value)}
               />
             </div>
-            <div className="flex items-center gap-2">
+            <div className="grid gap-2">
+              <Label>After Photo {newStatus === "resolved" ? "(required for AI check)" : "(optional)"}</Label>
               <input
                 ref={fileInputRef}
                 type="file"
                 accept="image/*"
-                onChange={(e) => setPhotoFile(e.target.files?.[0] ?? null)}
+                onChange={handlePhotoChange}
                 className="hidden"
               />
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  <Camera className="mr-1 h-4 w-4" />
+                  {photoFile ? "Change Photo" : "Attach Photo"}
+                </Button>
+                {photoFile && (
+                  <span className="text-xs text-muted-foreground">
+                    {photoFile.name}
+                  </span>
+                )}
+              </div>
+              {photoPreview && (
+                <div>
+                  <p className="mb-1 text-xs font-medium text-muted-foreground">After photo preview:</p>
+                  <img
+                    src={photoPreview}
+                    alt="After photo preview"
+                    className="h-32 w-full rounded-lg object-cover"
+                  />
+                </div>
+              )}
+            </div>
+
+            {/* AI Verify Button - shown when resolving or if photo is attached */}
+            {photoFile && (
               <Button
                 type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => fileInputRef.current?.click()}
+                variant="secondary"
+                onClick={handleVerify}
+                disabled={isVerifying}
+                className="gap-2"
               >
-                <Camera className="mr-1 h-4 w-4" />
-                {photoFile ? photoFile.name : "Attach Photo"}
+                {isVerifying ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Running AI Analysis...
+                  </>
+                ) : (
+                  <>
+                    <BrainCircuit className="h-4 w-4" />
+                    Run AI Verification
+                  </>
+                )}
               </Button>
-            </div>
+            )}
+
+            {/* Verification result */}
+            {verification && <VerificationResult result={verification} />}
+
             <Button onClick={handleUpdate} disabled={isUpdating}>
               {isUpdating ? (
                 <>

@@ -19,6 +19,12 @@ export interface Category {
   description: string | null
 }
 
+export interface AIVerification {
+  resolved: boolean
+  score: number
+  comment: string
+}
+
 export interface ServiceRequest {
   id: string
   title: string
@@ -32,6 +38,7 @@ export interface ServiceRequest {
   longitude: number | null
   address: string | null
   photo_url: string | null
+  ai_verification: AIVerification | null
   created_at: string
   updated_at: string
   // Joined fields
