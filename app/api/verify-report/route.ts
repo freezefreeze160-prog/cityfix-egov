@@ -1,9 +1,31 @@
-import { createClient } from "@/lib/supabase/server"
+import { createServerClient } from "@supabase/ssr"
+import { cookies } from "next/headers"
 import { NextResponse } from "next/server"
 
 export async function POST(request: Request) {
   try {
-    const supabase = await createClient()
+    const cookieStore = await cookies()
+    const supabase = createServerClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      {
+        cookies: {
+          getAll() {
+            return cookieStore.getAll()
+          },
+          setAll(cookiesToSet) {
+            cookiesToSet.forEach(({ name, value, options }) => {
+              try {
+                cookieStore.set(name, value, options)
+              } catch {
+                // ignore - can't set cookies in route handler response after streaming
+              }
+            })
+          },
+        },
+      }
+    )
+
     const {
       data: { user },
     } = await supabase.auth.getUser()
@@ -14,7 +36,7 @@ export async function POST(request: Request) {
 
     const formData = await request.formData()
     const requestId = formData.get("request_id") as string
-    const beforeUrl = formData.get("before_url") as string
+    const beforeUrl = formData.get("before_url") as string | null
     const afterFile = formData.get("after_photo") as File | null
 
     if (!requestId || !afterFile) {
@@ -25,11 +47,16 @@ export async function POST(request: Request) {
     }
 
     // Upload the "after" photo to Supabase storage
-    const ext = afterFile.name.split(".").pop()
+    const ext = afterFile.name.split(".").pop() || "jpg"
     const filePath = `${user.id}/after_${Date.now()}.${ext}`
+    const arrayBuffer = await afterFile.arrayBuffer()
     const { error: uploadError } = await supabase.storage
       .from("request-photos")
-      .upload(filePath, afterFile)
+      .upload(filePath, arrayBuffer, {
+        contentType: afterFile.type || "image/jpeg",
+        cacheControl: "3600",
+        upsert: false,
+      })
     if (uploadError) {
       return NextResponse.json(
         { error: `Upload failed: ${uploadError.message}` },
@@ -41,25 +68,28 @@ export async function POST(request: Request) {
     } = supabase.storage.from("request-photos").getPublicUrl(filePath)
 
     // Fetch both images as base64 for Gemini
-    const [beforeRes, afterRes] = await Promise.all([
-      beforeUrl ? fetch(beforeUrl) : null,
-      fetch(afterUrl),
-    ])
-
-    const afterBuf = Buffer.from(await afterRes.arrayBuffer())
+    const afterBuf = Buffer.from(arrayBuffer)
     const afterBase64 = afterBuf.toString("base64")
     const afterMime = afterFile.type || "image/jpeg"
 
     const parts: Array<Record<string, unknown>> = []
 
     // Add "before" image if available
-    if (beforeRes && beforeRes.ok) {
-      const beforeBuf = Buffer.from(await beforeRes.arrayBuffer())
-      const beforeBase64 = beforeBuf.toString("base64")
-      const contentType = beforeRes.headers.get("content-type") || "image/jpeg"
-      parts.push({
-        inline_data: { mime_type: contentType, data: beforeBase64 },
-      })
+    if (beforeUrl) {
+      try {
+        const beforeRes = await fetch(beforeUrl)
+        if (beforeRes.ok) {
+          const beforeBuf = Buffer.from(await beforeRes.arrayBuffer())
+          const beforeBase64 = beforeBuf.toString("base64")
+          const contentType =
+            beforeRes.headers.get("content-type") || "image/jpeg"
+          parts.push({
+            inline_data: { mime_type: contentType, data: beforeBase64 },
+          })
+        }
+      } catch {
+        // skip before image if fetch fails
+      }
     }
 
     // Add "after" image
@@ -104,7 +134,7 @@ Return STRICTLY valid JSON, no markdown, no backticks:
       const errText = await geminiRes.text()
       console.error("[v0] Gemini API error:", errText)
       return NextResponse.json(
-        { error: "Gemini API error", details: errText },
+        { error: "Gemini API error" },
         { status: 502 }
       )
     }
@@ -113,26 +143,24 @@ Return STRICTLY valid JSON, no markdown, no backticks:
     const rawText =
       geminiData?.candidates?.[0]?.content?.parts?.[0]?.text ?? ""
 
-    // Parse JSON from Gemini response (may contain markdown wrapping)
+    // Parse JSON from Gemini response
     let verification: { resolved: boolean; score: number; comment: string }
     try {
       const jsonMatch = rawText.match(/\{[\s\S]*\}/)
       verification = JSON.parse(jsonMatch?.[0] ?? rawText)
     } catch {
-      verification = { resolved: false, score: 0, comment: rawText.slice(0, 300) }
+      verification = {
+        resolved: false,
+        score: 0,
+        comment: rawText.slice(0, 300),
+      }
     }
 
-    // Store verification result and after photo on the service request
-    const { error: updateError } = await supabase
+    // Store verification result on the service request
+    await supabase
       .from("service_requests")
-      .update({
-        ai_verification: verification,
-      })
+      .update({ ai_verification: verification })
       .eq("id", requestId)
-
-    if (updateError) {
-      console.error("[v0] Update error:", updateError)
-    }
 
     return NextResponse.json({
       verification,

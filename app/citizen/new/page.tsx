@@ -5,9 +5,6 @@ import { Button } from "@/components/ui/button"
 import {
   Card,
   CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
 } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -23,13 +20,20 @@ import type { Category, RequestPriority } from "@/lib/types"
 import { ArrowLeft, Camera, MapPin, Loader2 } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { useEffect, useRef, useState } from "react"
+import { useRef, useState } from "react"
 import { toast } from "sonner"
 import useSWR from "swr"
 
 async function fetchCategories(): Promise<Category[]> {
   const supabase = createClient()
-  const { data } = await supabase.from("categories").select("*").order("name")
+  const { data, error } = await supabase
+    .from("categories")
+    .select("*")
+    .order("name")
+  if (error) {
+    console.error("[v0] Failed to fetch categories:", error.message)
+    return []
+  }
   return (data ?? []) as Category[]
 }
 
@@ -84,24 +88,47 @@ export default function NewRequestPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (!title.trim()) {
+      toast.error("Please enter a title")
+      return
+    }
+    if (!categoryId) {
+      toast.error("Please select a category")
+      return
+    }
+
     setIsSubmitting(true)
 
     try {
       const supabase = createClient()
       const {
         data: { user },
+        error: authError,
       } = await supabase.auth.getUser()
-      if (!user) throw new Error("Not authenticated")
+
+      if (authError || !user) {
+        toast.error("Session expired. Please log in again.")
+        router.push("/auth/login")
+        return
+      }
 
       let photoUrl: string | null = null
 
       if (photoFile) {
-        const ext = photoFile.name.split(".").pop()
+        const ext = photoFile.name.split(".").pop() || "jpg"
         const filePath = `${user.id}/${Date.now()}.${ext}`
         const { error: uploadError } = await supabase.storage
           .from("request-photos")
-          .upload(filePath, photoFile)
-        if (uploadError) throw uploadError
+          .upload(filePath, photoFile, {
+            cacheControl: "3600",
+            upsert: false,
+          })
+        if (uploadError) {
+          console.error("[v0] Photo upload error:", uploadError)
+          toast.error("Photo upload failed: " + uploadError.message)
+          setIsSubmitting(false)
+          return
+        }
 
         const {
           data: { publicUrl },
@@ -109,24 +136,35 @@ export default function NewRequestPage() {
         photoUrl = publicUrl
       }
 
-      const { error } = await supabase.from("service_requests").insert({
-        title,
-        description,
+      const insertData = {
+        title: title.trim(),
+        description: description.trim() || null,
         category_id: categoryId,
         priority,
         citizen_id: user.id,
-        address,
+        address: address.trim() || null,
         latitude,
         longitude,
         photo_url: photoUrl,
-      })
+      }
 
-      if (error) throw error
+      const { error } = await supabase
+        .from("service_requests")
+        .insert(insertData)
+
+      if (error) {
+        console.error("[v0] Insert error:", error)
+        toast.error("Submit failed: " + error.message)
+        return
+      }
 
       toast.success("Request submitted successfully!")
       router.push("/citizen")
     } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "Failed to submit")
+      console.error("[v0] Unexpected error:", err)
+      toast.error(
+        err instanceof Error ? err.message : "An unexpected error occurred"
+      )
     } finally {
       setIsSubmitting(false)
     }
@@ -178,7 +216,7 @@ export default function NewRequestPage() {
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="grid gap-2">
                 <Label htmlFor="category">Category</Label>
-                <Select value={categoryId} onValueChange={setCategoryId} required>
+                <Select value={categoryId} onValueChange={setCategoryId}>
                   <SelectTrigger>
                     <SelectValue placeholder="Select category" />
                   </SelectTrigger>
