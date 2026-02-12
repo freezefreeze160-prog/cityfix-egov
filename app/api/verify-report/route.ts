@@ -138,7 +138,7 @@ Return STRICTLY valid JSON only, no markdown, no backticks:
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: "gpt-4.1-mini",
+        model: "o3-mini",
         messages: [{ role: "user", content }],
         temperature: 0.2,
         max_tokens: 300,
